@@ -25,6 +25,10 @@ MAX_HISTORY = int(os.getenv("MAX_HISTORY", "200"))
 PORT = int(os.getenv("PORT", "8001"))
 HOST = os.getenv("HOST", "::")
 
+# 日志配置
+LOG_FILE = os.getenv("LOG_FILE", "app.log")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
 # 请求头模板
 HEADERS_TEMPLATE = {
     "channel": CHANNEL,

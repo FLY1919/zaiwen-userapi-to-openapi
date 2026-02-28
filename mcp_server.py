@@ -14,7 +14,7 @@ from database import get_latest_token
 from auth import validate_token
 from image import image_tasks, run_image_generation
 from music import music_tasks, run_music_generation
-from config import DEFAULT_IMAGE_MODEL, DEFAULT_MUSIC_MODEL
+from logger import logger
 
 server_initialized = False
 mcp_server = Server("zaiwen-creative")
@@ -90,7 +90,7 @@ async def list_tools(request: Optional[ListToolsRequest] = None) -> ListToolsRes
 async def call_tool(name: str, arguments: dict) -> CallToolResult:
     global server_initialized
     if not server_initialized:
-        print("[MCP] 警告：工具调用可能发生在初始化完成前，但将继续处理")
+        logger.warning("工具调用可能发生在初始化完成前，但将继续处理")
 
     token = get_latest_token()
     if not token:
@@ -154,6 +154,7 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
     except Exception as e:
         import traceback
         traceback.print_exc()
+        logger.error(f"工具调用异常 {name}: {e}")
         return CallToolResult(
             content=[TextContent(type="text", text=f"错误: {str(e)}")],
             isError=True
@@ -176,6 +177,7 @@ async def handle_generate_image_submit(arguments: dict, token: str) -> CallToolR
     }
 
     asyncio.create_task(run_image_generation(task_id, token, prompt, image_asset_id, ratio))
+    logger.info(f"图片任务提交: {task_id}, prompt: {prompt[:50]}...")
 
     return CallToolResult(
         content=[TextContent(type="text", text=f"任务已提交，任务ID: {task_id}\n请稍后使用 get_image_result 获取结果。")]
@@ -221,6 +223,7 @@ async def handle_generate_music_submit(arguments: dict, token: str) -> CallToolR
     }
 
     asyncio.create_task(run_music_generation(task_id, token, title, prompt, tags, make_instrumental))
+    logger.info(f"音乐任务提交: {task_id}, title: {title}")
 
     return CallToolResult(
         content=[TextContent(type="text", text=f"任务已提交，任务ID: {task_id}\n请稍后使用 get_music_result 获取结果。")]

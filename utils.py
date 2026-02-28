@@ -1,13 +1,14 @@
 import asyncio
 import json
 import uuid
+import time
 from typing import List, Optional, Dict, Any, AsyncGenerator
 import httpx
 from fastapi import HTTPException
 from config import HEADERS_TEMPLATE, BASE_URL, MAX_HISTORY
 from database import get_latest_token
 from auth import validate_token
-import time
+from logger import logger
 
 def merge_messages_to_prompt(messages: List[Dict]) -> str:
     lines = []
@@ -56,6 +57,7 @@ async def call_original_stream(prompt: str, model_key: str, token: str, file_ids
                                  json=payload, headers=headers) as response:
             if response.status_code != 200:
                 error_text = await response.aread()
+                logger.error(f"原始流式请求失败: {response.status_code} {error_text.decode()}")
                 raise HTTPException(status_code=response.status_code, detail=error_text.decode())
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
@@ -73,13 +75,14 @@ async def delete_conversation(token: str, conversation_id: str):
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("code") == 0:
-                    print(f"[删除] 会话 {conversation_id} 已删除")
+                    logger.info(f"会话 {conversation_id} 已删除")
                 else:
-                    print(f"[删除失败] {data.get('msg')}")
+                    logger.error(f"删除会话失败: {data.get('msg')}")
             else:
-                print(f"[删除HTTP错误] {resp.status_code}")
+                error_text = await resp.aread()
+                logger.error(f"删除会话HTTP错误 {resp.status_code}: {error_text.decode()}")
         except Exception as e:
-            print(f"[删除异常] {e}")
+            logger.error(f"删除会话异常: {e}")
 
 async def original_to_openai_stream_with_cleanup(
     original_gen: AsyncGenerator[str, None],

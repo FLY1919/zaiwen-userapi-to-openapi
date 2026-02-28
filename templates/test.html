@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+
+{% block title %}AI聊天 - 在问AI代理{% endblock %}
+
+{% block content %}
+<h2 class="text-center mb-4" style="color: #667eea;">
+    <i class="bi bi-robot"></i> 在问AI 智能助手
+</h2>
+
+<div class="row mb-3">
+    <div class="col-md-6">
+        <label for="models" class="form-label fw-bold"><i class="bi bi-cpu"></i> 选择模型</label>
+        <select class="form-select" id="models">
+            <option value="">加载中...</option>
+        </select>
+    </div>
+    <div class="col-md-6 d-flex align-items-end">
+        <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="streamCheckbox" checked>
+            <label class="form-check-label fw-bold" for="streamCheckbox">流式输出</label>
+        </div>
+        <button class="btn btn-outline-gradient ms-auto" id="clearChatBtn" onclick="clearChat()">
+            <i class="bi bi-trash"></i> 清空对话
+        </button>
+    </div>
+</div>
+
+<!-- 聊天历史区域 -->
+<div id="chat-history" class="mb-3">
+    <!-- 动态插入消息 -->
+</div>
+
+<!-- 输入区域 -->
+<div class="mb-3">
+    <label for="message" class="form-label fw-bold"><i class="bi bi-chat-dots"></i> 输入消息</label>
+    <textarea class="form-control" id="message" rows="2" placeholder="输入消息..."></textarea>
+</div>
+
+<div class="row g-2 mb-3">
+    <div class="col-md-8">
+        <label for="file" class="form-label fw-bold"><i class="bi bi-image"></i> 上传图片（可选）</label>
+        <input class="form-control" type="file" id="file" accept="image/*">
+        <div id="preview" class="mt-2"></div>
+    </div>
+    <div class="col-md-4 d-flex align-items-end">
+        <button class="btn btn-gradient w-100 py-2" id="send">
+            <i class="bi bi-send"></i> 发送
+        </button>
+    </div>
+</div>
+
+<div id="response" class="mt-3 p-3 bg-light rounded" style="display: none;"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // 对话历史数组
+    let messages = [];
+    let currentAssistantMessage = ''; // 用于流式累加
+    let assistantMessageId = null;    // 用于标记当前助手消息元素
+
+    const modelSelect = document.getElementById('models');
+    const messageInput = document.getElementById('message');
+    const fileInput = document.getElementById('file');
+    const previewDiv = document.getElementById('preview');
+    const sendBtn = document.getElementById('send');
+    const chatHistory = document.getElementById('chat-history');
+    const streamCheckbox = document.getElementById('streamCheckbox');
+    const clearChatBtn = document.getElementById('clearChatBtn');
+
+    // 加载模型列表
+    async function loadModels() {
+        try {
+            const res = await fetch('/v1/models');
+            if (!res.ok) throw new Error(await res.text());
+            const data = await res.json();
+            modelSelect.innerHTML = '';
+            data.data.forEach(m => {
+                const option = document.createElement('option');
+                option.value = m.id;
+                option.textContent = m.id;
+                modelSelect.appendChild(option);
+            });
+        } catch (e) {
+            modelSelect.innerHTML = '<option value="">加载失败</option>';
+            console.error(e);
+        }
+    }
+    loadModels();
+
+    // 图片预览
+    fileInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function(ev) {
+                previewDiv.innerHTML = `<img src="${ev.target.result}" class="image-preview">`;
+            }
+            reader.readAsDataURL(file);
+        } else {
+            previewDiv.innerHTML = '';
+        }
+    });
+
+    // 上传图片并返回 asset_id
+    async function uploadImage(file) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/upload/image', {
+            method: 'POST',
+            body: formData
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        return data.asset_id;
+    }
+
+    // 清空对话
+    function clearChat() {
+        messages = [];
+        chatHistory.innerHTML = '';
+    }
+
+    // 添加用户消息到界面
+    function addUserMessage(content, imageUrl) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'chat-message user';
+        let avatar = '<div class="avatar"><i class="bi bi-person-circle"></i></div>';
+        let contentHtml = `<div class="message-bubble">${content}`;
+        if (imageUrl) {
+            contentHtml += `<br><img src="${imageUrl}" class="image-preview">`;
+        }
+        contentHtml += '</div>';
+        messageDiv.innerHTML = avatar + contentHtml;
+        chatHistory.appendChild(messageDiv);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+
+    // 添加助手消息占位（流式开始）
+    function addAssistantMessagePlaceholder() {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'chat-message assistant';
+        messageDiv.id = 'assistant-message-' + Date.now();
+        messageDiv.innerHTML = '<div class="avatar"><i class="bi bi-robot"></i></div><div class="message-bubble loading-dots">思考中</div>';
+        chatHistory.appendChild(messageDiv);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+        return messageDiv.id;
+    }
+
+    // 更新助手消息内容（流式增量）
+    function updateAssistantMessage(elementId, content, isFinal = false) {
+        const msgDiv = document.getElementById(elementId);
+        if (!msgDiv) return;
+        const bubble = msgDiv.querySelector('.message-bubble');
+        if (bubble) {
+            bubble.innerHTML = content.replace(/\\n/g, '<br>');
+            if (!isFinal) {
+                // 非最终状态，移除 loading 类
+                bubble.classList.remove('loading-dots');
+            }
+        }
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+
+    // 完成助手消息，移除 loading
+    function finishAssistantMessage(elementId) {
+        const msgDiv = document.getElementById(elementId);
+        if (!msgDiv) return;
+        const bubble = msgDiv.querySelector('.message-bubble');
+        if (bubble) {
+            bubble.classList.remove('loading-dots');
+        }
+    }
+
+    // 发送消息
+    sendBtn.addEventListener('click', async function() {
+        const model = modelSelect.value;
+        const content = messageInput.value.trim();
+        const file = fileInput.files[0];
+
+        if (!model) {
+            alert('请选择模型');
+            return;
+        }
+        if (!content && !file) {
+            alert('请输入消息或上传图片');
+            return;
+        }
+
+        sendBtn.disabled = true;
+        let fileIds = [];
+
+        try {
+            // 上传图片
+            if (file) {
+                const assetId = await uploadImage(file);
+                fileIds = [assetId];
+                // 添加用户消息到界面（带图片预览）
+                addUserMessage(content, URL.createObjectURL(file));
+            } else {
+                addUserMessage(content, null);
+            }
+
+            // 将用户消息加入历史
+            messages.push({ role: 'user', content: content || ' ' });
+
+            // 添加助手消息占位
+            const assistantId = addAssistantMessagePlaceholder();
+
+            const useStream = streamCheckbox.checked;
+
+            const payload = {
+                model: model,
+                messages: messages,  // 发送完整历史
+                stream: useStream,
+                file_ids: fileIds
+            };
+
+            const res = await fetch('/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                console.error('响应错误:', errText);
+                throw new Error(errText);
+            }
+
+            let assistantReply = '';
+
+            if (useStream) {
+                // 流式处理
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let fullText = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\\n');
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') continue;
+                            try {
+                                const parsed = JSON.parse(data);
+                                const delta = parsed.choices[0].delta.content;
+                                if (delta) {
+                                    fullText += delta;
+                                    updateAssistantMessage(assistantId, fullText, false);
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                }
+                assistantReply = fullText;
+                finishAssistantMessage(assistantId);
+            } else {
+                // 非流式处理
+                const data = await res.json();
+                assistantReply = data.choices[0].message.content;
+                updateAssistantMessage(assistantId, assistantReply, true);
+            }
+
+            // 将助手回复加入历史
+            messages.push({ role: 'assistant', content: assistantReply });
+
+            // 清空输入和文件
+            messageInput.value = '';
+            fileInput.value = '';
+            previewDiv.innerHTML = '';
+
+        } catch (e) {
+            alert('错误：' + e.message);
+        } finally {
+            sendBtn.disabled = false;
+        }
+    });
+
+    // 按回车发送（Shift+Enter换行）
+    messageInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendBtn.click();
+        }
+    });
+</script>
+{% endblock %}

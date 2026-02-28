@@ -5,6 +5,10 @@ from typing import Optional, Dict, Any, AsyncGenerator
 import httpx
 from config import HEADERS_TEMPLATE, BASE_URL, DEFAULT_MUSIC_MODEL, POLL_MAX_ATTEMPTS, POLL_INTERVAL
 from utils import delete_conversation
+from logger import logger
+
+# 任务存储（由 mcp_server 管理）
+music_tasks: Dict[str, Dict[str, Any]] = {}
 
 async def call_original_suno_stream(prompt: str, title: str, token: str,
                                      model: str = DEFAULT_MUSIC_MODEL, 
@@ -42,13 +46,13 @@ async def call_original_suno_stream(prompt: str, title: str, token: str,
                                      json=payload, headers=headers) as response:
                 if response.status_code != 200:
                     error_text = await response.aread()
-                    print(f"[音乐请求失败] HTTP {response.status_code}: {error_text.decode()}")
+                    logger.error(f"音乐请求失败 HTTP {response.status_code}: {error_text.decode()}")
                     raise Exception(f"音乐生成请求失败: HTTP {response.status_code}")
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         yield line[6:]
         except Exception as e:
-            print(f"[音乐请求异常] {e}")
+            logger.error(f"音乐请求异常: {e}")
             raise
 
 async def poll_suno_task(task_id: str, token: str, max_attempts: int = POLL_MAX_ATTEMPTS, interval: float = POLL_INTERVAL) -> Dict:
@@ -64,32 +68,33 @@ async def poll_suno_task(task_id: str, token: str, max_attempts: int = POLL_MAX_
                     if data.get("code") == 0:
                         status = data["data"]["status"]
                         if status == "completed":
+                            logger.info(f"音乐任务 {task_id} 完成")
                             return data["data"]
                         elif status == "failed":
                             error_detail = data.get("data", {}).get("error", "未知错误")
+                            logger.error(f"音乐任务失败: {error_detail}")
                             raise Exception(f"音乐任务失败: {error_detail}")
                     else:
                         if data.get("code") in ("02404", 404):
+                            logger.error(f"音乐任务不存在: {data.get('msg')}")
                             raise Exception(f"任务不存在: {data.get('msg')}")
+                        logger.error(f"查询音乐任务失败: {data.get('msg')}")
                         raise Exception(f"查询任务失败: {data.get('msg')}")
                 else:
                     error_text = await resp.aread()
-                    print(f"[轮询音乐任务] HTTP {resp.status_code}: {error_text.decode()}")
+                    logger.error(f"轮询音乐任务 HTTP {resp.status_code}: {error_text.decode()}")
                     if resp.status_code == 404:
                         raise Exception(f"任务不存在 (HTTP 404)")
                     if attempt == max_attempts - 1:
                         raise Exception(f"HTTP错误: {resp.status_code}")
             except Exception as e:
-                print(f"[轮询音乐任务异常] attempt {attempt+1}: {e}")
+                logger.error(f"轮询音乐任务异常 attempt {attempt+1}: {e}")
                 if "不存在" in str(e) or "02404" in str(e) or "404" in str(e):
                     raise
                 if attempt == max_attempts - 1:
                     raise
         await asyncio.sleep(interval)
     raise Exception("音乐任务超时")
-
-# 任务存储（由 mcp_server 管理）
-music_tasks: Dict[str, Dict[str, Any]] = {}
 
 async def run_music_generation(task_id: str, token: str, title: str, prompt: str, tags: Optional[str], make_instrumental: bool):
     try:
@@ -134,7 +139,8 @@ async def run_music_generation(task_id: str, token: str, title: str, prompt: str
 
         music_tasks[task_id]["status"] = "completed"
         music_tasks[task_id]["result"] = markdown
+        logger.info(f"音乐生成任务 {task_id} 完成")
     except Exception as e:
         music_tasks[task_id]["status"] = "failed"
         music_tasks[task_id]["error"] = str(e)
-        print(f"[后台任务失败] task_id={task_id}, error={e}")
+        logger.error(f"音乐生成后台任务失败 task_id={task_id}, error={e}")
