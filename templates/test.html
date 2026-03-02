@@ -131,7 +131,7 @@
             contentHtml += `<br><img src="${imageUrl}" class="image-preview">`;
         }
         contentHtml += '</div>';
-        messageDiv.innerHTML = avatar + contentHtml;
+        messageDiv.innerHTML = contentHtml + avatar;
         chatHistory.appendChild(messageDiv);
         chatHistory.scrollTop = chatHistory.scrollHeight;
     }
