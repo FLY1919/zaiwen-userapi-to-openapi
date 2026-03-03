@@ -115,7 +115,7 @@
         }
     });
 
-    // 上传图片并返回 asset_id
+    // 上传图片并返回 asset_id 和永久图片 URL
     async function uploadImage(file) {
         const formData = new FormData();
         formData.append('file', file);
@@ -125,7 +125,11 @@
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        return data.asset_id;
+        // 直接使用实际接口返回的字段
+        return { 
+            assetId: data.asset_id, 
+            url: data.url 
+        };
     }
 
     // 渲染Markdown
@@ -143,6 +147,7 @@
                 messageDiv.className = 'chat-message user';
                 let contentHtml = `<div class="message-bubble">${msg.content}`;
                 if (msg.imageUrl) {
+                    // 使用永久图片 URL
                     contentHtml += `<br><img src="${msg.imageUrl}" class="image-preview">`;
                 }
                 contentHtml += '</div>';
@@ -163,7 +168,6 @@
 
     // 保存历史到localStorage
     function saveChatHistory() {
-        // 只保存消息数组，不保存DOM（避免ID冲突）
         localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
     }
 
@@ -192,7 +196,7 @@
         localStorage.removeItem(STORAGE_KEY);
     };
 
-    // 添加用户消息到界面和数组
+    // 添加用户消息到界面和数组（使用永久图片 URL）
     function addUserMessage(content, imageUrl) {
         messages.push({ role: 'user', content: content, imageUrl: imageUrl });
         const messageDiv = document.createElement('div');
@@ -241,10 +245,8 @@
         const bubble = msgDiv.querySelector('.message-bubble');
         if (bubble) {
             bubble.classList.remove('loading-dots');
-            // 确保最终内容渲染正确
             bubble.innerHTML = renderMarkdown(content);
         }
-        // 将助手回复加入消息数组
         messages.push({ role: 'assistant', content: content });
         saveChatHistory();
         chatHistory.scrollTop = chatHistory.scrollHeight;
@@ -267,27 +269,30 @@
 
         sendBtn.disabled = true;
         let fileIds = [];
-        let imageUrl = null;
+        let permanentImageUrl = null; // 用于存储服务器返回的永久图片 URL
 
         try {
             // 上传图片
             if (file) {
-                const assetId = await uploadImage(file);
-                fileIds = [assetId];
-                imageUrl = URL.createObjectURL(file);
+                const uploadResult = await uploadImage(file);
+                fileIds = [uploadResult.assetId];
+                permanentImageUrl = uploadResult.url; // 获取永久 URL
             }
 
-            // 添加用户消息到界面
-            addUserMessage(content, imageUrl);
+            // 添加用户消息到界面（使用永久 URL）
+            addUserMessage(content, permanentImageUrl);
 
             // 添加助手消息占位
             const assistantId = addAssistantMessagePlaceholder();
 
             const useStream = streamCheckbox.checked;
 
+            // 构造 payload，注意 messages 不应包含刚添加的助手消息（尚未生成）
             const payload = {
                 model: model,
-                messages: messages.slice(0, -1), // 不包含刚添加的助手消息（尚未生成）
+                messages: messages.slice(0, -1), // 排除刚添加的用户消息？不，messages 已包含用户消息，应全部发送
+                // 实际上 messages 已经包含了所有历史，包括刚添加的用户消息，所以直接发送 messages 即可
+                // 但需要确保 messages 中不包含空的助手消息占位
                 stream: useStream,
                 file_ids: fileIds
             };
@@ -338,7 +343,6 @@
                         }
                     }
                 }
-                // 处理最后可能剩余的部分
                 assistantReply = fullText;
                 finishAssistantMessage(assistantId, fullText);
             } else {
