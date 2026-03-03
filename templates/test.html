@@ -14,12 +14,12 @@
             <option value="">加载中...</option>
         </select>
     </div>
-    <div class="col-md-6 d-flex align-items-end">
-        <div class="form-check form-switch">
+    <div class="col-md-6 d-flex align-items-end justify-content-end">
+        <div class="form-check form-switch me-3">
             <input class="form-check-input" type="checkbox" id="streamCheckbox" checked>
             <label class="form-check-label fw-bold" for="streamCheckbox">流式输出</label>
         </div>
-        <button class="btn btn-outline-gradient ms-auto" id="clearChatBtn" onclick="clearChat()">
+        <button class="btn btn-outline-gradient" id="clearChatBtn" onclick="clearChat()">
             <i class="bi bi-trash"></i> 清空对话
         </button>
     </div>
@@ -31,9 +31,16 @@
 </div>
 
 <!-- 输入区域 -->
-<div class="mb-3">
-    <label for="message" class="form-label fw-bold"><i class="bi bi-chat-dots"></i> 输入消息</label>
-    <textarea class="form-control" id="message" rows="2" placeholder="输入消息..."></textarea>
+<div class="row g-2 mb-3">
+    <div class="col-12">
+        <label for="message" class="form-label fw-bold"><i class="bi bi-chat-dots"></i> 输入消息</label>
+        <div class="input-group">
+            <textarea class="form-control" id="message" rows="2" placeholder="输入消息... (Shift+Enter换行, Enter发送)"></textarea>
+            <button class="btn btn-gradient" id="send">
+                <i class="bi bi-send"></i> 发送
+            </button>
+        </div>
+    </div>
 </div>
 
 <div class="row g-2 mb-3">
@@ -42,22 +49,18 @@
         <input class="form-control" type="file" id="file" accept="image/*">
         <div id="preview" class="mt-2"></div>
     </div>
-    <div class="col-md-4 d-flex align-items-end">
-        <button class="btn btn-gradient w-100 py-2" id="send">
-            <i class="bi bi-send"></i> 发送
-        </button>
-    </div>
 </div>
 
 <div id="response" class="mt-3 p-3 bg-light rounded" style="display: none;"></div>
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
     // 对话历史数组
     let messages = [];
-    let currentAssistantMessage = ''; // 用于流式累加
-    let assistantMessageId = null;    // 用于标记当前助手消息元素
+    let currentAssistantMessage = '';
+    let assistantMessageId = null;
 
     const modelSelect = document.getElementById('models');
     const messageInput = document.getElementById('message');
@@ -67,6 +70,16 @@
     const chatHistory = document.getElementById('chat-history');
     const streamCheckbox = document.getElementById('streamCheckbox');
     const clearChatBtn = document.getElementById('clearChatBtn');
+
+    const STORAGE_KEY = 'chat_history';
+
+    // 配置marked选项
+    marked.setOptions({
+        breaks: true,
+        gfm: true,
+        headerIds: false,
+        mangle: false
+    });
 
     // 加载模型列表
     async function loadModels() {
@@ -115,25 +128,85 @@
         return data.asset_id;
     }
 
-    // 清空对话
-    function clearChat() {
-        messages = [];
-        chatHistory.innerHTML = '';
+    // 渲染Markdown
+    function renderMarkdown(text) {
+        if (!text) return '';
+        return marked.parse(text);
     }
 
-    // 添加用户消息到界面
+    // 重新渲染整个历史（用于加载存储后）
+    function renderHistory() {
+        chatHistory.innerHTML = '';
+        for (const msg of messages) {
+            if (msg.role === 'user') {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'chat-message user';
+                let contentHtml = `<div class="message-bubble">${msg.content}`;
+                if (msg.imageUrl) {
+                    contentHtml += `<br><img src="${msg.imageUrl}" class="image-preview">`;
+                }
+                contentHtml += '</div>';
+                let avatar = '<div class="avatar"><i class="bi bi-person-circle"></i></div>';
+                messageDiv.innerHTML = contentHtml + avatar;
+                chatHistory.appendChild(messageDiv);
+            } else {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'chat-message assistant';
+                messageDiv.id = 'assistant-' + Date.now() + Math.random();
+                const renderedContent = renderMarkdown(msg.content);
+                messageDiv.innerHTML = `<div class="avatar"><i class="bi bi-robot"></i></div><div class="message-bubble">${renderedContent}</div>`;
+                chatHistory.appendChild(messageDiv);
+            }
+        }
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+
+    // 保存历史到localStorage
+    function saveChatHistory() {
+        // 只保存消息数组，不保存DOM（避免ID冲突）
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    }
+
+    // 加载历史
+    function loadChatHistory() {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+            try {
+                messages = JSON.parse(saved);
+                renderHistory();
+            } catch (e) {
+                console.error('加载历史失败', e);
+            }
+        }
+    }
+
+    // 页面加载时恢复历史
+    window.addEventListener('load', function() {
+        loadChatHistory();
+    });
+
+    // 清空对话
+    window.clearChat = function() {
+        messages = [];
+        chatHistory.innerHTML = '';
+        localStorage.removeItem(STORAGE_KEY);
+    };
+
+    // 添加用户消息到界面和数组
     function addUserMessage(content, imageUrl) {
+        messages.push({ role: 'user', content: content, imageUrl: imageUrl });
         const messageDiv = document.createElement('div');
         messageDiv.className = 'chat-message user';
-        let avatar = '<div class="avatar"><i class="bi bi-person-circle"></i></div>';
         let contentHtml = `<div class="message-bubble">${content}`;
         if (imageUrl) {
             contentHtml += `<br><img src="${imageUrl}" class="image-preview">`;
         }
         contentHtml += '</div>';
+        let avatar = '<div class="avatar"><i class="bi bi-person-circle"></i></div>';
         messageDiv.innerHTML = contentHtml + avatar;
         chatHistory.appendChild(messageDiv);
         chatHistory.scrollTop = chatHistory.scrollHeight;
+        saveChatHistory();
     }
 
     // 添加助手消息占位（流式开始）
@@ -153,9 +226,8 @@
         if (!msgDiv) return;
         const bubble = msgDiv.querySelector('.message-bubble');
         if (bubble) {
-            bubble.innerHTML = content.replace(/\\n/g, '<br>');
+            bubble.innerHTML = renderMarkdown(content);
             if (!isFinal) {
-                // 非最终状态，移除 loading 类
                 bubble.classList.remove('loading-dots');
             }
         }
@@ -163,13 +235,19 @@
     }
 
     // 完成助手消息，移除 loading
-    function finishAssistantMessage(elementId) {
+    function finishAssistantMessage(elementId, content) {
         const msgDiv = document.getElementById(elementId);
         if (!msgDiv) return;
         const bubble = msgDiv.querySelector('.message-bubble');
         if (bubble) {
             bubble.classList.remove('loading-dots');
+            // 确保最终内容渲染正确
+            bubble.innerHTML = renderMarkdown(content);
         }
+        // 将助手回复加入消息数组
+        messages.push({ role: 'assistant', content: content });
+        saveChatHistory();
+        chatHistory.scrollTop = chatHistory.scrollHeight;
     }
 
     // 发送消息
@@ -189,20 +267,18 @@
 
         sendBtn.disabled = true;
         let fileIds = [];
+        let imageUrl = null;
 
         try {
             // 上传图片
             if (file) {
                 const assetId = await uploadImage(file);
                 fileIds = [assetId];
-                // 添加用户消息到界面（带图片预览）
-                addUserMessage(content, URL.createObjectURL(file));
-            } else {
-                addUserMessage(content, null);
+                imageUrl = URL.createObjectURL(file);
             }
 
-            // 将用户消息加入历史
-            messages.push({ role: 'user', content: content || ' ' });
+            // 添加用户消息到界面
+            addUserMessage(content, imageUrl);
 
             // 添加助手消息占位
             const assistantId = addAssistantMessagePlaceholder();
@@ -211,7 +287,7 @@
 
             const payload = {
                 model: model,
-                messages: messages,  // 发送完整历史
+                messages: messages.slice(0, -1), // 不包含刚添加的助手消息（尚未生成）
                 stream: useStream,
                 file_ids: fileIds
             };
@@ -235,12 +311,16 @@
                 const reader = res.body.getReader();
                 const decoder = new TextDecoder();
                 let fullText = '';
+                let buffer = '';
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
-                    const chunk = decoder.decode(value);
-                    const lines = chunk.split('\\n');
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
                     for (const line of lines) {
                         if (line.startsWith('data: ')) {
                             const data = line.slice(6);
@@ -252,21 +332,22 @@
                                     fullText += delta;
                                     updateAssistantMessage(assistantId, fullText, false);
                                 }
-                            } catch (e) {}
+                            } catch (e) {
+                                console.warn('解析错误', e);
+                            }
                         }
                     }
                 }
+                // 处理最后可能剩余的部分
                 assistantReply = fullText;
-                finishAssistantMessage(assistantId);
+                finishAssistantMessage(assistantId, fullText);
             } else {
                 // 非流式处理
                 const data = await res.json();
                 assistantReply = data.choices[0].message.content;
                 updateAssistantMessage(assistantId, assistantReply, true);
+                finishAssistantMessage(assistantId, assistantReply);
             }
-
-            // 将助手回复加入历史
-            messages.push({ role: 'assistant', content: assistantReply });
 
             // 清空输入和文件
             messageInput.value = '';
@@ -288,4 +369,119 @@
         }
     });
 </script>
+
+<style>
+    /* PC端优化 */
+    #chat-history {
+        height: 60vh;
+        min-height: 400px;
+        max-height: 600px;
+        overflow-y: auto;
+        padding: 20px;
+        background: rgba(255,255,255,0.5);
+        border-radius: 20px;
+        margin-bottom: 20px;
+        scroll-behavior: smooth;
+    }
+    .message-bubble {
+        max-width: 70%;
+        padding: 12px 18px;
+        border-radius: 20px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        word-wrap: break-word;
+        line-height: 1.5;
+        font-size: 1rem;
+    }
+    .user .message-bubble {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-bottom-right-radius: 5px;
+    }
+    .assistant .message-bubble {
+        background: white;
+        color: #333;
+        border-bottom-left-radius: 5px;
+        border: 1px solid #f0f0f0;
+    }
+    /* Markdown 样式 */
+    .assistant .message-bubble pre {
+        background: #f5f5f5;
+        padding: 10px;
+        border-radius: 8px;
+        overflow-x: auto;
+    }
+    .assistant .message-bubble code {
+        background: #f5f5f5;
+        padding: 2px 4px;
+        border-radius: 4px;
+        font-family: 'Courier New', monospace;
+    }
+    .assistant .message-bubble p {
+        margin-bottom: 0.5rem;
+    }
+    .assistant .message-bubble ul, .assistant .message-bubble ol {
+        margin-top: 0.5rem;
+        margin-bottom: 0.5rem;
+        padding-left: 1.5rem;
+    }
+    .assistant .message-bubble blockquote {
+        border-left: 4px solid #667eea;
+        padding-left: 1rem;
+        color: #666;
+        margin: 0.5rem 0;
+    }
+    .assistant .message-bubble table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 0.5rem 0;
+    }
+    .assistant .message-bubble th, .assistant .message-bubble td {
+        border: 1px solid #ddd;
+        padding: 6px;
+        text-align: left;
+    }
+    .assistant .message-bubble th {
+        background: #f5f5f5;
+    }
+    /* 调整输入区域布局 */
+    .input-group .btn {
+        border-top-right-radius: 25px;
+        border-bottom-right-radius: 25px;
+    }
+    .input-group textarea {
+        border-top-left-radius: 25px;
+        border-bottom-left-radius: 25px;
+        resize: vertical;
+        min-height: 60px;
+    }
+    /* 头像 */
+    .avatar {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 10px;
+        background: #f0f0f0;
+        color: #667eea;
+        font-weight: bold;
+    }
+    .user .avatar {
+        background: #764ba2;
+        color: white;
+    }
+    .assistant .avatar {
+        background: #667eea;
+        color: white;
+    }
+    /* 图片预览 */
+    .image-preview {
+        max-width: 200px;
+        max-height: 200px;
+        border-radius: 10px;
+        margin-top: 10px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+</style>
 {% endblock %}
